@@ -18,8 +18,8 @@ def main(args):
     else:
         torch.cuda.set_device(local_rank)
         device = torch.device('cuda', local_rank)
-        dist.init_process_group('nccl')
-    logger.log(str(device))
+        torch.distributed.init_process_group('nccl')
+    logger.log(f'Using device: {str(device)}', force=True)
 
 
 if __name__ == '__main__':

@@ -28,8 +28,8 @@ class Logger:
     def __init__(self, on=True):
         self.on = on
 
-    def log(self, string, newline=True, forced=False):
-        if self.on or forced:
+    def log(self, string, newline=True, force=False):
+        if self.on or force:
             sys.stdout.write(string)
             if newline: sys.stdout.write('\n')
             sys.stdout.flush()
