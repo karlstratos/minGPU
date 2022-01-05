@@ -40,23 +40,26 @@ def main(args):
         num_devices_per_process = len(args.gpus.split(','))
         logger.log(f'DP model wrapping, {num_devices_per_process} devices: '
                    f'{args.gpus}')
-        model = nn.DataParallel(model)
+        model = torch.nn.DataParallel(model)
     else:
         logger.log('Single-process single-device, no model wrapping')
 
     dataset = MyDataset(args.num_examples, args.dim, args.num_labels)
     if is_distributed:
-        logger.log('Using DistributedSampler in DataLoader')
+        assert args.batch_size % world_size == 0
+        batch_size_per_process = args.batch_size // world_size
+        logger.log(f'Using DistributedSampler in DataLoader, batch size '
+                   f'{batch_size_per_process} per process')
         sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset, num_replicas=world_size, rank=rank, shuffle=True,
-            seed=args.seed, drop_last=False)
+            dataset, num_replicas=world_size, rank=rank,
+            shuffle=not args.no_shuffle, seed=args.seed, drop_last=False)
         loader = torch.utils.data.DataLoader(dataset,
-                                             batch_size=args.batch_size,
+                                             batch_size=batch_size_per_process,
                                              sampler=sampler)
     else:
         loader = torch.utils.data.DataLoader(dataset,
                                              batch_size=args.batch_size,
-                                             shuffle=True)
+                                             shuffle=not args.no_shuffle)
 
     # Training
     sumCE = torch.nn.CrossEntropyLoss(reduction='sum')
@@ -65,20 +68,39 @@ def main(args):
     for epoch in range(1, args.epochs + 1):
         num_steps = 0
         loss_sum = 0.
-        num_correct = 0
+        num_correct_sum = 0
+
+        # DDP w/ drop_last=False: Fill trailing batch with early examples.
         for batch_num, (examples, labels) in enumerate(loader):
+            examples = examples.to(device)
+            labels = labels.to(device)
             scores, predictions = model(examples)
             loss = sumCE(scores, labels)
+            num_correct = (predictions == labels).sum()
+
             if num_devices_per_process > 1:  # DP returns a vector of losses
                 loss = loss.sum()
+
+            if is_distributed:
+                torch.distributed.all_reduce(loss,
+                                             op=torch.distributed.ReduceOp.SUM)
+                torch.distributed.all_reduce(num_correct,
+                                             op=torch.distributed.ReduceOp.SUM)
+
+            loss_sum += loss.item()
+            num_correct_sum += num_correct.item()
+
+            # DDP: all_reduce(gradients, MEAN)
             loss.backward()
-            num_correct += (predictions == labels).sum().item()
+
+            # DDP: all_reduce(gradients, SUM) before updating
             optimizer.step()
+
             num_steps += 1
             optimizer.zero_grad()
 
         loss_per_step = loss_sum / num_steps
-        acc = num_correct / args.num_examples * 100
+        acc = num_correct_sum / args.num_examples * 100
         logger.log(f'End of epoch {epoch}:  per-step loss {loss_per_step:8.4f},'
                    f'  acc {acc:4.2f}')
 
@@ -88,8 +110,9 @@ if __name__ == '__main__':
     parser.add_argument('--dim', type=int, default=2)
     parser.add_argument('--num_labels', type=int, default=3)
     parser.add_argument('--batch_size', type=int, default=4)
-    parser.add_argument('--lr', type=float, default=2e-5)
+    parser.add_argument('--lr', type=float, default=1.)
     parser.add_argument('--epochs', type=int, default=2)
+    parser.add_argument('--no_shuffle', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--gpus', default='', type=str)
     args = parser.parse_args()

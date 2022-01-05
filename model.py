@@ -11,3 +11,9 @@ class MyModel(torch.nn.Module):
         scores = self.scorer(examples)  # (N, L)
         _, predictions = scores.max(dim=1)  # (N,)
         return scores, predictions
+
+    def weight(self):
+        return self.scorer.weight
+
+    def grad(self):
+        return self.scorer.weight.grad
