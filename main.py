@@ -38,7 +38,35 @@ def main(args):
     num_devices_per_process = 1
     if is_distributed:
         logger('DDP model wrapping (multi-process single-device)')
+
+        # DDP broadcasts model weights to all processes in the world:
+        # https://discuss.pytorch.org/t/when-will-dist-all-reduce-will-be-called/129918/2
         model = DDP(model, device_ids=[local_rank], output_device=local_rank)
+
+        # lr scaling: DDP all-reduces grad info g divided by num processes (K)
+        # at backward, then lets each process make its own update.
+        #
+        # If the update method is not gradient scale invariant, like SGD, we
+        # need to use lr multiplied by K to have the original update:
+        #           w' = w - lr * g = w - (K * lr) * (g/K)
+        #
+        # If the update method is gradient scale invariant, like any
+        # AdaGrad-styleSGD method such as Adam (using epsilon=0), we should
+        # NOT do that since
+        #           w' = w - lr * Update(g)
+        #              = w - lr * Update(g/K)
+        # So multiplying lr by K will make the update K times bigger.
+        # If epsilon!=0, there is no way to achieve the same update. But since
+        # scale invariance is approximately preserved, we should not scale lr
+        # for DDP in general if we're doing Adam and want consistency..
+        #<COMMENTED>
+        #scale_invariant_opts = ['adam', 'adagrad', 'rmsprop']
+        #if args.opt in scale_invariant_opts: # and args.eps == 0:
+        #    pass
+        #else:
+        #    args.lr = world_size * args.lr
+        #</COMMENTED>
+
     elif torch.cuda.device_count() > 1:
         num_devices_per_process = len(args.gpus.split(','))
         logger(f'DP model wrapping (single-process multi-device): '
@@ -62,43 +90,99 @@ def main(args):
 
     # Training
     sumCE = nn.CrossEntropyLoss(reduction='sum')
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
-    model.train()
-    for epoch in range(1, args.epochs + 1):
-        num_steps = 0
-        loss_sum = 0.
-        num_correct_sum = 0
+    if args.opt == 'adam':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr,
+                                      eps=args.eps)
+    elif args.opt == 'sgd':
+        optimizer = torch.optim.SGD(model.parameters(), lr=args.lr)
+    elif args.opt == 'adagrad':
+        optimizer = torch.optim.Adagrad(model.parameters(), lr=args.lr,
+                                        eps=args.eps)
+    elif args.opt == 'rmsprop':
+        optimizer = torch.optim.RMSprop(model.parameters(), lr=args.lr,
+                                        eps=args.eps)
+    else:
+        raise
 
-        # DDP w/ drop_last=False: Fill trailing batch with early examples.
+    model.train()
+    num_steps = 0
+    for epoch in range(1, args.epochs + 1):
+        num_steps_per_epoch = 0
+        loss_sum_per_epoch = 0.
+        num_correct_sum_per_epoch = 0
+
+        # DDP w/ drop_last=False fills trailing batch with early examples.
         for batch_num, (examples, labels) in enumerate(loader):
             examples = examples.to(device)
             labels = labels.to(device)
             scores, predictions = model(examples)
             loss = sumCE(scores, labels)
             num_correct = (predictions == labels).sum()
-
-            if num_devices_per_process > 1:  # DP returns a vector of losses
-                loss = loss.sum()
+            if num_steps == 0:
+                logger(f'First batch examples {list(examples.shape)} '
+                       f'({str(device)})', ['yellow'])
+                logger(f'First batch loss {loss:13.10g} ({str(device)})',
+                       ['yellow'])
 
             if is_distributed:
+                # Nice pictures of collective communcation:
+                # https://pytorch.org/tutorials/intermediate/dist_tuto.html#collective-communication
                 all_reduce(loss, op=ReduceOp.SUM)
                 all_reduce(num_correct, op=ReduceOp.SUM)
 
-            loss_sum += loss.item()
-            num_correct_sum += num_correct.item()
+                if num_steps == 0:
+                    logger(f'First batch loss after all_reduce {loss:13.10g} '
+                           f'({str(device)})', ['yellow'])
 
-            # DDP: all_reduce(gradients, MEAN)
+            loss_sum_per_epoch += loss.item()
+            num_correct_sum_per_epoch += num_correct.item()
+
+            # DDP all-reduces gradients and AVERAGES them. Each process will
+            # holds G/(# processes) where G is the grad/grad^2/etc. of loss..
             loss.backward()
 
-            # DDP: all_reduce(gradients, SUM) before updating
+            if num_steps == 0:
+                try:
+                    g = model.grad()
+                    w = model.weight()
+                except AttributeError:  # DP or DDP
+                    g = model.module.grad()
+                    w = model.module.weight()
+
+                logger(f'grad[0,0] after loss.backward(): {g[0, 0]:13.10g} '
+                       f'({str(device)})', ['yellow'])
+                logger(f'weight[0,0] before optimizer.step(): {w[0, 0]:13.10g} '
+                       f'({str(device)})', ['red'])
+
+                #<COMMENTED>
+                #w2 = w[0, 0] - args.lr * g[0, 0]
+                #logger(f'My own SGD-updated weight[0,0]: {w2:13.10g}'
+                #       f'({str(device)})', ['darkcyan', 'bold'])
+                #</COMMENTED>
+
+            # In DDP, each process independently makes (the same) parameter
+            # update using g/K. Since they all have the same init (broadcasted
+            # upon DDP wrapping), the updated parameters will be the same if the
+            # update is the same (e.g., SGD with scaled lr, or Adagrad with
+            # eps=0 and nonscaled lr).
             optimizer.step()
 
+            if num_steps == 0:
+                try:
+                    w = model.weight()
+                except AttributeError:  # DP or DDP
+                    w = model.module.weight()
+
+                logger(f'weight[0,0] after optimizer.step(): {w[0, 0]:13.10g} '
+                       f'({str(device)})', ['red'])
+
+            num_steps_per_epoch += 1
             num_steps += 1
             optimizer.zero_grad()
 
-        loss_per_step = loss_sum / num_steps
-        acc = num_correct_sum / args.num_examples * 100
-        logger(f'End of epoch {epoch}:  per-step loss {loss_per_step:8.4f},'
+        loss_per_step = loss_sum_per_epoch / num_steps_per_epoch
+        acc = num_correct_sum_per_epoch / args.num_examples * 100
+        logger(f'End of epoch {epoch}:  per-step loss {loss_per_step:12.8f},'
                f'  acc {acc:4.2f}')
 
 
@@ -108,7 +192,9 @@ if __name__ == '__main__':
     parser.add_argument('--dim', type=int, default=42)
     parser.add_argument('--num_labels', type=int, default=13)
     parser.add_argument('--batch_size', type=int, default=5)  # Per process
+    parser.add_argument('--opt', default='adamw', type=str)
     parser.add_argument('--lr', type=float, default=1.)
+    parser.add_argument('--eps', type=float, default=0)  # For scale invariance
     parser.add_argument('--epochs', type=int, default=3)
     parser.add_argument('--no_shuffle', action='store_true')
     parser.add_argument('--seed', type=int, default=42)

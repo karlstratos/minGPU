@@ -51,7 +51,7 @@ class MyModel(nn.Module):
 
     def __init__(self, dim, num_labels):
         super().__init__()
-        self.scorer = nn.Linear(dim, num_labels)
+        self.scorer = nn.Linear(dim, num_labels, bias=False)
 
     def forward(self, examples):  # (num_examples, dim)
         scores = self.scorer(examples)  # (num_examples, num_labels)
