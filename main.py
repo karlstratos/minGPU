@@ -9,7 +9,7 @@ def main(args):
     import torch.nn as nn
 
     from logger import Logger, add_colors
-    from torch.distributed import all_reduce, ReduceOp
+    from torch.distributed import all_reduce, ReduceOp, barrier
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
     from torch.nn import DataParallel as DP
     from torch.nn.parallel import DistributedDataParallel as DDP
@@ -195,11 +195,12 @@ def main(args):
             num_steps_per_epoch += 1
             num_steps += 1
             optimizer.zero_grad()
+            barrier()
 
         loss_per_step = loss_sum_per_epoch / num_steps_per_epoch
         acc = num_correct_sum_per_epoch / args.num_examples * 100
-        logger(f'End of epoch {epoch}:  per-step loss {loss_per_step:12.8f},'
-               f'  acc {acc:4.2f}')
+        logger(f'End of epoch {epoch}: {num_steps_per_epoch} steps, '
+               f'per-step loss {loss_per_step:12.8f}, acc {acc:4.2f}')
 
 
 if __name__ == '__main__':
