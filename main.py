@@ -4,10 +4,11 @@ import sys
 
 
 def main(args):
+    import numpy as np
     import torch
     import torch.nn as nn
 
-    from logger import Logger
+    from logger import Logger, add_colors
     from torch.distributed import all_reduce, ReduceOp
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
     from torch.nn import DataParallel as DP
@@ -17,12 +18,13 @@ def main(args):
     from toy import check_distributed, MyModel, MyDataset
 
 
+    np.set_printoptions(formatter={'float': lambda x: '{0:0.3f}'.format(x)})
     torch.manual_seed(args.seed)
 
     rank, local_rank, world_size = check_distributed()
     is_main_process = local_rank in [-1, 0]
     is_distributed = world_size != -1
-    logger = Logger(on=is_main_process)
+    logger = Logger(on=(is_main_process and not args.quiet))
 
     if is_distributed:
         torch.cuda.set_device(local_rank)
@@ -76,10 +78,18 @@ def main(args):
         logger('No model wrapping (single-process single-device)')
 
     dataset = MyDataset(args.num_examples, args.dim, args.num_labels)
+
+    print_data = args.num_examples <= 10 and args.dim == 1
+    if print_data:
+        X = dataset.examples.numpy().transpose()
+        string = f'Data ({args.num_examples}, {args.dim}): ' + \
+            f'{add_colors(str(X), ["purple"])}'
+        logger(string)
+
     if is_distributed:
         sampler = DistributedSampler(dataset, num_replicas=world_size,
                                      rank=rank, shuffle=not args.no_shuffle,
-                                     seed=args.seed, drop_last=False)
+                                     seed=args.seed, drop_last=args.drop_last)
         shuffle = False  # Sampler does the shuffling
     else:
         sampler = None
@@ -113,6 +123,12 @@ def main(args):
 
         # DDP w/ drop_last=False fills trailing batch with early examples.
         for batch_num, (examples, labels) in enumerate(loader):
+            if print_data:
+                X = examples.numpy().transpose()
+                string = f'Batch {batch_num} {list(examples.shape)} ' + \
+                    f'({str(device)}): {add_colors(str(X), ["purple"])}'
+                logger(string, force=True)
+
             examples = examples.to(device)
             labels = labels.to(device)
             scores, predictions = model(examples)
@@ -192,11 +208,13 @@ if __name__ == '__main__':
     parser.add_argument('--dim', type=int, default=42)
     parser.add_argument('--num_labels', type=int, default=13)
     parser.add_argument('--batch_size', type=int, default=5)  # Per process
-    parser.add_argument('--opt', default='adamw', type=str)
+    parser.add_argument('--opt', default='adam', type=str)
     parser.add_argument('--lr', type=float, default=1.)
     parser.add_argument('--eps', type=float, default=0)  # For scale invariance
     parser.add_argument('--epochs', type=int, default=3)
+    parser.add_argument('--drop_last', action='store_true')
     parser.add_argument('--no_shuffle', action='store_true')
+    parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--gpus', default='', type=str)
     args = parser.parse_args()
