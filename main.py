@@ -15,8 +15,7 @@ def main(args):
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.utils.data import DataLoader
     from torch.utils.data.distributed import DistributedSampler
-    from toy import check_distributed, MyModel, MyDataset
-
+    from toy import check_distributed, LinearNet, MyDataset
 
     np.set_printoptions(formatter={'float': lambda x: '{0:0.3f}'.format(x)})
     torch.manual_seed(args.seed)
@@ -24,7 +23,7 @@ def main(args):
     rank, local_rank, world_size = check_distributed()
     is_main_process = local_rank in [-1, 0]
     is_distributed = world_size != -1
-    logger = Logger(on=(is_main_process and not args.quiet))
+    logger = Logger(on=(is_main_process and not args.quiet), stamp=False)
 
     if is_distributed:
         torch.cuda.set_device(local_rank)
@@ -33,9 +32,9 @@ def main(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    logger(f'Using device: {str(device)}', force=True)  # Print each process
+    logger(f'Using device: {str(device)}', force=True)
 
-    model = MyModel(args.dim, args.num_labels).to(device)
+    model = LinearNet(args.dim, args.num_labels).to(device)
 
     num_devices_per_process = 1
     if is_distributed:
@@ -195,7 +194,9 @@ def main(args):
             num_steps_per_epoch += 1
             num_steps += 1
             optimizer.zero_grad()
-            barrier()
+
+            if is_distributed:
+                barrier()
 
         loss_per_step = loss_sum_per_epoch / num_steps_per_epoch
         acc = num_correct_sum_per_epoch / args.num_examples * 100

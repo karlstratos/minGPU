@@ -30,19 +30,19 @@ def remove_colors(string):
 
 class Logger:
 
-    def __init__(self, log_path=None, on=True, plain_file=True):
+    def __init__(self, log_path=None, on=True, plain_file=True, stamp=True):
         self.log_path = log_path
         self.on = on
         self.plain_file = plain_file
+        self.stamp = stamp
         if self.on and self.log_path is not None:
             while os.path.isfile(self.log_path):
                 self.log_path += '+'
 
-    def __call__(self, message, colors=[], stamp=True, newline=True,
-                 force=False):
+    def __call__(self, message, colors=[], newline=True, force=False):
         message = add_colors(message, colors)
 
-        if stamp:
+        if self.stamp:
             time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
             message = f'{add_colors(time, ["green"])} | {message}'
 
@@ -60,8 +60,9 @@ class Logger:
 
 
 if __name__ == '__main__':
-    logger = Logger()
-    logger('Plain text', stamp=False)
+    logger_unstamped = Logger(stamp=False)
+    logger_unstamped('Plain text')
+    logger = Logger(stamp=True)
     logger('Stamped text')
     logger('Boldfaced', ['bold'])
     logger('Bold and red', ['bold', 'red'])
