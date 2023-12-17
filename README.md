@@ -35,6 +35,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node=2 main.py --no_shuffle --epoch
 ```
 
 # Distributed Sampler 
+
 PyTorch's [DistributedSampler](https://pytorch.org/docs/stable/data.html#torch.utils.data.distributed.DistributedSampler) shards $N$ examples so that each of the $K$ processes receives a batch of $B$ examples in each iteration. That means 
  1. One epoch consists of $\lfloor N/(KB) \rfloor$ iterations. 
  2. After those iterations, we have $M < KB$ examples left ($M=0$ iff $KB$ divides $N$).
@@ -115,6 +116,7 @@ A central question how to shard parameters. PyTorch implements sharding by neste
 Each FSDP wrap shards the parameters that are not sharded already by a descendent wrap by flattening them (`FlatParameter`) and evenly dividing them across $K$ processes, padding with zeros.
 
 ### Example
+
 We use a toy $3$-layer feedforward with $21$ parameters for illustration: $u = C\\;\text{ReLU}(B\\;\text{ReLU}(A\\;x + a) + b) + c$ where
 
 $$
@@ -160,3 +162,7 @@ torchrun --standalone --nnodes=1 --nproc_per_node=2 main_fsdp.py --gpus 0,1 --ba
 ```
 
 Layer-wise sharding seems natural for any multi-layer feedforward-style archiecture, including transformers. PyTorch provides an [auto wrap](https://github.com/pytorch/pytorch/blob/34fe850d0083688abf0a27f3e864723f0858aab1/torch/distributed/fsdp/wrap.py#L305C26-L305C26) for wrapping the specified transformer blocks.
+
+### Computation-Communication Overlap 
+
+It is in our interest to maximize the overlap between (1) the time spent in doing the computation for the current FSDP unit (computation cost) and (2) the time spent in fetching the parameters of the next FSDP unit (communication cost), since they are independent and can be done simultaneously. Note however that the overlap can also increase the peak memory up to double. The current best practice is to prefetch params before the current unit's grad computation ([`BACKWARD_PRE`](https://pytorch.org/docs/stable/fsdp.html#torch.distributed.fsdp.BackwardPrefetch)), which improves speed by up to 13% with <1% increased peak memory according to [this video](https://www.youtube.com/watch?v=sDM56HOziE4&list=PL_lsbAsL_o2BT6aerEKgIoufVD_fodnuT&index=8).
