@@ -1,33 +1,33 @@
-This repository contains minimal code that demonstrates how distributed computing actually works in PyTorch.
+This repository contains minimal code that demonstrates the basics of multi-GPU computing in PyTorch.
 
 # Setup
 
 ```
-conda create --name multi-gpu python=3.10
-conda activate multi-gpu
-conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia  # Remove 'pytorch-cuda=11.8' if installing on a Mac
+conda create --name minGPU python=3.10
+conda activate minGPU
+conda install pytorch==2.1.0 torchvision==0.16.0 torchaudio==2.1.0 pytorch-cuda=11.8 -c pytorch -c nvidia  
 ```
 
-# CPU, GPU, DP vs DDP
-
-We first demonstrate that we obtain the same updates whether we do
-single-process single-device (CPU/GPU), single-process multi-device (DP), or multi-process single-device (DDP).
-(There are very slight differences in losses/gradients due to numerical precision issues.)
-The batch size $B$ is per process, so we need $B = B_{\mathrm{eff}}/K$ where $B_{\mathrm{eff}}$ is the effective batch size and $K$ is the number of processes.
-Furthermore, DDP all-reduces and *averages* the gradients across processes in backward, so the learning rate $\eta$ has to be $K$ times bigger with simple updates like SGD
-since $w' = w - \eta g = w - (K \eta) (g/K)$.
-The following code produces the same results.
+# Exercise: Getting the Same Updates
+We'll train a toy model with vanilla SGD by
+ * **Non-distributed:** Single-process single-device, where the device is either CPU or GPU
+ * **DP (Data Parallel)**: Single-process multi-GPU 
+ * **DDP (Distributed Data Parallel)**: Multi-process (we'll use $K=2$ processes), each process is single-GPU 
 ```
 python main.py --no_shuffle --epochs 3 --opt sgd --batch_size 10 --lr 1  # CPU
 python main.py --no_shuffle --epochs 3 --opt sgd --batch_size 10 --lr 1  --gpus 0  # GPU
 python main.py --no_shuffle --epochs 3 --opt sgd --batch_size 10 --lr 1  --gpus 0,1  # DP
 torchrun --standalone --nnodes=1 --nproc_per_node=2 main.py --no_shuffle --epochs 3 --opt sgd --batch_size 5 --lr 2 --gpus 0,1  # DDP
 ```
-However, when we use an update that is invariant to gradient scaling (e.g., any AdaGrad-style update including Adam),
-the learning rate should *not* be scaled since $w' = w - \eta \text{Update}(g) = w - \eta \text{Update}(g/K)$.
-In this case, multiplying $\eta$ by $K$ will make the update $K$ times bigger.
-(Such an update is usually not exactly scaling-invariant because of $\epsilon > 0$ smoothing, but is still approximately invariant so $\eta$ shouldn't be scaled.)
-The following code produces the same results.
+Note that DDP must use the batch size $5$ to achieve the effective batch size $10$ with $2$ processes.
+Also, DDP must use the learning rate $2 \eta$ since it all-reduces and *averages* the gradients across processes in backward:
+$w' = w - \eta g = w - (2 \eta) (g/2)$.
+
+## Scale-Invariant Updates
+But if the update is invariant to gradient scaling (e.g., any AdaGrad-style update, including Adam),
+the learning rate should *not* be scaled since $w' = w - \eta \text{Update}(g) = w - \eta \text{Update}(g/2)$.
+Such an update is usually not exactly scaling-invariant because of the $\epsilon$ smoothing, but is still approximately invariant so $\eta$ shouldn't be scaled.
+We'll use $\epsilon=0$ here for demonstration.
 ```
 python main.py --no_shuffle --epochs 3 --opt adam --batch_size 10 --lr 1 --eps 0 # CPU
 python main.py --no_shuffle --epochs 3 --opt adam --batch_size 10 --lr 1 --eps 0 --gpus 0  # GPU
