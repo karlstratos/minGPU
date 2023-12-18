@@ -45,6 +45,8 @@ def main(args):
     else:
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+    torch.cuda.empty_cache()
+
     logger(f'Using device: {str(device)}', force=True)
 
     model = ThreeLayerNet().to(device)
