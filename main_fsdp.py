@@ -9,6 +9,7 @@ def main(args):
     import torch
     import torch.nn as nn
 
+    from gpu_monitor import GPUMonitor
     from logger import Logger, add_colors
     from torch.distributed import all_reduce, ReduceOp, barrier
     from torch.distributed.fsdp import (
@@ -34,6 +35,8 @@ def main(args):
     is_main_process = local_rank in [-1, 0]
     is_distributed = world_size != -1
     logger = Logger(on=(is_main_process and not args.quiet), stamp=False)
+    if is_main_process:
+        gpu_monitor = GPUMonitor(logger, ['purple'])
 
     if is_distributed:
         torch.cuda.set_device(local_rank)
@@ -180,6 +183,9 @@ def main(args):
             if is_distributed:
                 barrier()
 
+        if is_main_process:
+            gpu_monitor.update()  # Print out GPU usage at each epoch
+
         lossps = loss_sum / num_steps
         acc = num_correct_sum / args.num_examples * 100
         return num_steps, lossps, acc
@@ -193,6 +199,9 @@ def main(args):
     with torch.no_grad():
         _, lossps, _ = do_epoch(model)
     logger(f'Final per-step loss: {lossps:12.8f}', ['red'])
+
+    if is_main_process:
+        gpu_monitor.summarize()  # Training GPU usage summary
 
     logger(f'Saving model/optimizer ({str(device)})')
     if (not is_distributed) or is_ddp:
@@ -269,7 +278,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_examples', type=int, default=100)
     parser.add_argument('--batch_size', type=int, default=5)  # Per process
     parser.add_argument('--lr', type=float, default=0.01)
-    parser.add_argument('--epochs', type=int, default=3)
+    parser.add_argument('--epochs', type=int, default=5)
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--dist', type=str, default='fsdp',
                         choices=['ddp', 'fsdp'])

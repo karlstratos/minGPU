@@ -8,6 +8,7 @@ def main(args):
     import torch
     import torch.nn as nn
 
+    from gpu_monitor import GPUMonitor
     from logger import Logger, add_colors
     from torch.distributed import all_reduce, ReduceOp, barrier
     from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
@@ -24,6 +25,8 @@ def main(args):
     is_main_process = local_rank in [-1, 0]
     is_distributed = world_size != -1
     logger = Logger(on=(is_main_process and not args.quiet), stamp=False)
+    if is_main_process:
+        gpu_monitor = GPUMonitor(logger, ['purple'])
 
     if is_distributed:
         torch.cuda.set_device(local_rank)
@@ -198,10 +201,16 @@ def main(args):
             if is_distributed:
                 barrier()
 
+        if is_main_process:
+            gpu_monitor.update()  # Print out GPU usage at each epoch
+
         loss_per_step = loss_sum_per_epoch / num_steps_per_epoch
         acc = num_correct_sum_per_epoch / args.num_examples * 100
         logger(f'End of epoch {epoch}: {num_steps_per_epoch} steps, '
                f'per-step loss {loss_per_step:12.8f}, acc {acc:4.2f}')
+
+    if is_main_process:
+        gpu_monitor.summarize()  # Training GPU usage summary
 
 
 if __name__ == '__main__':
