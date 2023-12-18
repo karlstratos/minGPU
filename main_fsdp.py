@@ -22,7 +22,9 @@ def main(args):
         ShardingStrategy,
         CPUOffload,
     )
-    from torch.distributed.fsdp.wrap import size_based_auto_wrap_policy
+    from torch.distributed.fsdp.wrap import (
+        size_based_auto_wrap_policy, enable_wrap, wrap
+    )
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.utils.data import DataLoader
     from torch.utils.data.distributed import DistributedSampler
@@ -95,11 +97,18 @@ def main(args):
                 size_based_auto_wrap_policy, min_num_params=7)
             model = FSDP(model, **shared_fsdp_kwargs)
         elif args.wrap == 'layer':  # Manual layer-wise sharding
-            model.layer1 = FSDP(model.layer1, **shared_fsdp_kwargs)
-            model.layer2 = FSDP(model.layer2, **shared_fsdp_kwargs)
-            model.layer3 = FSDP(model.layer3, **shared_fsdp_kwargs)
+            # enable_wrap/wrap is useful for applying the same config to all
+            # child modules you wrap. Alternatively, you could wrap explicitly
+            # like this:
+            #model.layer1 = FSDP(model.layer1, **shared_fsdp_kwargs)
+            #model.layer2 = FSDP(model.layer2, **shared_fsdp_kwargs)
+            #model.layer3 = FSDP(model.layer3, **shared_fsdp_kwargs)
+            with enable_wrap(wrapper_cls=FSDP, **shared_fsdp_kwargs):
+                model.layer1 = wrap(model.layer1)
+                model.layer2 = wrap(model.layer2)
+                model.layer3 = wrap(model.layer3)
 
-            # Always wrap the base model with an outer FSDP.
+            # Always wrap the top module.
             # https://github.com/pytorch/xla/blob/bf5edb3938245b0d125f222b2a07ac0835a90081/test/test_train_mp_mnist_fsdp_with_ckpt.py#L216C13-L216C13
             model = FSDP(model, **shared_fsdp_kwargs)
         else:
