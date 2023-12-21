@@ -155,11 +155,17 @@ def main(args):
                    force=True)
 
     dataset = MyDataset(args.num_examples, 2, 3)
-    sampler = DistributedSampler(dataset, num_replicas=world_size,
-                                 rank=rank, shuffle=False, seed=args.seed,
-                                 drop_last=False) if is_distributed else None
+    if is_distributed:
+        sampler = DistributedSampler(dataset, num_replicas=world_size,
+                                     rank=rank, shuffle=not args.no_shuffle,
+                                     seed=args.seed, drop_last=args.drop_last)
+        shuffle = False  # Sampler does the shuffling
+    else:
+        sampler = None
+        shuffle = not args.no_shuffle
+
     loader = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
-                        shuffle=False)  # Don't bother shuffling.
+                        shuffle=shuffle)
 
     # Training
     sumCE = nn.CrossEntropyLoss(reduction='sum')
@@ -170,7 +176,13 @@ def main(args):
         loss_sum = 0.
         num_correct_sum = 0
 
-        for batch_num, (examples, labels) in enumerate(loader):
+        if is_distributed:
+            sampler.set_epoch(epoch)  # Without this, same shuffling every epoch
+
+        for batch_num, (examples, labels, indices) in enumerate(loader):
+
+            logger(str(indices) + f' batch {batch_num} ({str(device)})', force=True)
+
             examples = examples.to(device)
             labels = labels.to(device)
             scores, predictions = model(examples)
@@ -290,6 +302,8 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=5)  # Per process
     parser.add_argument('--lr', type=float, default=0.01)
     parser.add_argument('--epochs', type=int, default=5)
+    parser.add_argument('--drop_last', action='store_true')
+    parser.add_argument('--no_shuffle', action='store_true')
     parser.add_argument('--quiet', action='store_true')
     parser.add_argument('--dist', type=str, default='fsdp',
                         choices=['ddp', 'fsdp'])

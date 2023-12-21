@@ -45,7 +45,7 @@ class MyDataset(Dataset):
         return len(self.examples)
 
     def __getitem__(self, index):
-        return self.examples[index], self.labels[index]
+        return self.examples[index], self.labels[index], index
 
 
 class LinearNet(nn.Module):

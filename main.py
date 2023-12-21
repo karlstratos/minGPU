@@ -125,8 +125,11 @@ def main(args):
         loss_sum_per_epoch = 0.
         num_correct_sum_per_epoch = 0
 
+        if is_distributed:
+            sampler.set_epoch(epoch)  # Without this, same shuffling every epoch
+
         # DDP w/ drop_last=False fills trailing batch with early examples.
-        for batch_num, (examples, labels) in enumerate(loader):
+        for batch_num, (examples, labels, indices) in enumerate(loader):
             if print_data:
                 X = examples.numpy().transpose()
                 string = f'Batch {batch_num} {list(examples.shape)} ' + \
