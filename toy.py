@@ -37,9 +37,16 @@ def get_device(logger=None):
 
 class MyDataset(Dataset):
 
-    def __init__(self, num_examples, dim, num_labels):
-        self.examples = torch.randn(num_examples, dim)
-        self.labels = torch.randint(num_labels, (num_examples,))
+    def __init__(self, num_examples=10, dim=3, num_labels=4, to_load=None):
+        if to_load is None:
+            self.examples = torch.randn(num_examples, dim)
+            self.labels = torch.randint(num_labels, (num_examples,))
+        else:
+            self.examples, self.labels = to_load
+            if type(self.examples) is not torch.Tensor:
+                self.examples = torch.FloatTensor(self.examples)
+            if type(self.labels) is not torch.Tensor:
+                self.labels = torch.LongTensor(self.labels)
 
     def __len__(self):
         return len(self.examples)

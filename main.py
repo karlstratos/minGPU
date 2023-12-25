@@ -11,7 +11,6 @@ def main(args):
     from gpu_monitor import GPUMonitor
     from logger import Logger, add_colors
     from torch.distributed import all_reduce, ReduceOp, barrier
-    from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
     from torch.nn import DataParallel as DP
     from torch.nn.parallel import DistributedDataParallel as DDP
     from torch.utils.data import DataLoader
