@@ -33,6 +33,7 @@ python main.py --no_shuffle --epochs 3 --opt adam --batch_size 10 --lr 1 --eps 0
 python main.py --no_shuffle --epochs 3 --opt adam --batch_size 10 --lr 1 --eps 0 --gpus 0,1  # DP
 torchrun --standalone --nnodes=1 --nproc_per_node=2 main.py --no_shuffle --epochs 3 --opt adam --batch_size 5 --lr 1 --eps 0 --gpus 0,1  # DDP
 ```
+DDP itself is just a wrapper that, in conjunction with torchrun and DistributedSampler, does the data sharding, model scattering, and gradient synchronization for you. See `main_myddp.py` to see how this can be done manually (using multiprocessing, all-reduce, etc.). 
 
 # Distributed Sampler
 
